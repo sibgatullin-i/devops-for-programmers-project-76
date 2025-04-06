@@ -1,8 +1,26 @@
-hosts: all
-   become: true
-   roles:
-     - role: geerlingguy.pip
-       vars:
-         pip_install_packages:
-           - name: docker
-             state: present
+- hosts: all
+  become: true
+
+  roles:
+    - role: geerlingguy.pip
+      vars:
+        pip_install_packages:
+          - name: docker
+            state: present
+      tags: install_pip
+
+  tasks:
+    - name: create env
+      tags: create_env
+      ansible.builtin.template:
+        src: ./templates/env.j2
+        dest: .env
+        mode: "0644"
+    - name: install redmine
+      tags: install_redmine
+      community.docker.docker_container:
+        name: redmine
+        image: redmine:5.1.1
+        ports:
+          - "80:3000"
+        env_file: .env
