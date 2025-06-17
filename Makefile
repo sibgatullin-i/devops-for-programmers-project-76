@@ -1,8 +1,14 @@
-install_role:
-		ansible-galaxy install -r requirements.yml
+.PHONY: prepare deploy lint
 
-install_pip:
-		ansible-playbook playbook.yml -i inventory.ini -u root -vv -t install_pip
+prepare:
+	ansible-galaxy install -r requirements.yml
+	ansible-playbook -i inventory.ini playbook.yml
 
-install_redmine:
-		ansible-playbook playbook.yml -i inventory.ini --vault-password-file vault-password-file -t create_env,install_redmine -u root -vv
+deploy:
+	ansible-playbook -i inventory.ini deploy.yml --tags deploy
+
+lint:
+	ansible-lint playbook.yml --exclude ./tmp/
+	ansible-lint deploy.yml --exclude ./tmp/
+
+check: lint prepare

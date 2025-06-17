@@ -1,0 +1,29 @@
+- hosts: webservers
+  become: true
+  vars:
+    redmine_container_name: redmine_app
+    redmine_env_file: /opt/redmine/.env
+  tasks:
+    - name: Create directory for env file
+      file:
+        path: /opt/redmine
+        state: directory
+        mode: '0755'
+
+    - name: Create env file
+      ansible.builtin.template:
+        src: templates/redmine.env.j2
+        dest: "{{ redmine_env_file }}"
+        mode: '0644'
+
+    - name: Run Redmine container (bitnami/redmine)
+      community.docker.docker_container:
+        name: "{{ redmine_container_name }}"
+        image: bitnami/redmine:latest
+        ports:
+          - "{{ redmine_port }}:3000"
+        env_file: "{{ redmine_env_file }}"
+        restart_policy: always
+        volumes:
+          - /root/.postgresql:/root/.postgresql:ro
+  tags: deploy
