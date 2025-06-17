@@ -1,0 +1,9 @@
+
+redmine_db_adapter: "postgresql"
+redmine_db_host: "10.0.100.1"
+redmine_db_port: 6432
+redmine_db_user: "user1"
+redmine_db_name: "db1"
+redmine_db_password: '{{ vault_redmine_db_password }}'
+redmine_db_sslmode: "verify-full"
+redmine_db_sslcert_path: "/usr/local/share/ca-certificates/root.crt"
