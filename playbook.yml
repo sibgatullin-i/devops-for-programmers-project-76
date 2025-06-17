@@ -1,26 +1,136 @@
-- hosts: all
+---
+- name: Configure and deploy Redmine
+  hosts: all
   become: true
-
   roles:
-    - role: geerlingguy.pip
-      vars:
-        pip_install_packages:
-          - name: docker
-            state: present
-      tags: install_pip
+    - geerlingguy.pip
+    - geerlingguy.docker
 
   tasks:
-    - name: create env
-      tags: create_env
+    - name: Install PostgreSQL client
+      ansible.builtin.apt:
+        name: postgresql-client
+        state: present
+        update_cache: true
+
+    - name: Create PostgreSQL certificate directory
+      ansible.builtin.file:
+        path: /root/.postgresql
+        state: directory
+        mode: '0700'
+      tags:
+        - download_cert
+
+    - name: Download PostgreSQL root certificate
+      ansible.builtin.get_url:
+        url: https://storage.yandexcloud.net/cloud-certs/CA.pem
+        dest: /root/.postgresql/root.crt
+        mode: '0644'
+      tags:
+        - download_cert
+
+    - name: Create Redmine environment directory
+      ansible.builtin.file:
+        path: /opt/redmine
+        state: directory
+        mode: '0755'
+
+    - name: Create Redmine environment file
       ansible.builtin.template:
-        src: ./templates/env.j2
-        dest: .env
-        mode: "0644"
-    - name: install redmine
-      tags: install_redmine
+        src: redmine.env.j2
+        dest: "{{ redmine_env_file }}"
+        mode: '0644'
+
+    - name: Check database connection
+      ansible.builtin.command: >
+        psql
+        "host={{ db_host }}
+        port={{ db_port }}
+        sslmode={{ db_sslmode }}
+        sslrootcert={{ db_sslrootcert }}
+        dbname={{ db_name }}
+        user={{ db_user }}
+        target_session_attrs=read-write"
+        -c "SELECT 1;"
+      register: db_check
+      changed_when: false
+      failed_when: false
+
+    - name: Run Redmine container
       community.docker.docker_container:
-        name: redmine
-        image: redmine:5.1.1
+        name: "{{ redmine_container_name }}"
+        image: "{{ redmine_image }}"
+        state: started
+        restart_policy: always
+        env_file: "{{ redmine_env_file }}"
         ports:
-          - "80:3000"
-        env_file: .env
+          - "{{ redmine_port }}:3000"
+      when: db_check.rc == 0
+      register: container_start
+      notify: Wait for Redmine
+
+- name: Configure monitoring
+  hosts: webservers
+  become: true
+  vars_files:
+    - group_vars/webservers/vault.yml
+
+  tasks:
+    - name: Create http_check config directory
+      ansible.builtin.file:
+        path: /etc/datadog-agent/conf.d/http_check.d
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Copy http_check configuration
+      ansible.builtin.copy:
+        dest: /etc/datadog-agent/conf.d/http_check.d/conf.yaml
+        mode: '0644'
+        owner: root
+        group: root
+        content: |
+          init_config:
+
+          instances:
+            - name: redmine_health
+              url: http://localhost:{{ redmine_port }}/login
+              timeout: 1
+              check_certificate_expiration: true
+              skip_ssl_validation: true
+      notify: Restart Datadog agent
+
+    - name: Ensure Docker container dd-agent is running
+      community.docker.docker_container:
+        name: dd-agent
+        image: gcr.io/datadoghq/agent:7
+        state: started
+        restart_policy: unless-stopped
+        env:
+          DD_API_KEY: "{{ datadog_api_key }}"
+          DD_SITE: "datadoghq.com"
+          DD_DOGSTATSD_NON_LOCAL_TRAFFIC: "true"
+        volumes:
+          - /var/run/docker.sock:/var/run/docker.sock:ro
+          - /proc/:/host/proc/:ro
+          - /sys/fs/cgroup/:/host/sys/fs/cgroup:ro
+          - /var/lib/docker/containers:/var/lib/docker/containers:ro
+
+  handlers:
+    - name: Wait for Redmine
+      ansible.builtin.uri:
+        url: "http://localhost:{{ redmine_port }}/login"
+        method: GET
+        status_code: 200
+      register: result
+      until: result.status == 200
+      retries: 30
+      delay: 10
+      listen: "restart redmine"
+
+    - name: Restart Datadog agent
+      community.docker.docker_container:
+        name: dd-agent
+        state: started
+        force_kill: true
